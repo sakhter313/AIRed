@@ -1,0 +1,11 @@
+streamlit
+pandas
+plotly
+requests
+groq
+google-generativeai
+datasets
+huggingface-hub
+openai
+transformers
+torch
