@@ -341,7 +341,7 @@ with tab1:
     )
     st.caption(f"Max {MAX_CUSTOM_PROMPT_LENGTH} characters. Mutations generate deduplicated variants.")
 
-    run = st.button("🚀 Run Scan", disabled=not selected_models, use_container_width=True)
+    run = st.button("🚀 Run Scan", disabled=not selected_models)
 
 # ================================================
 # EXECUTION
