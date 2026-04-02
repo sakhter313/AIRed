@@ -289,6 +289,17 @@ temperature  = st.sidebar.slider("Temperature", 0.0, 1.0, 0.3)
 max_tokens   = st.sidebar.slider("Max Tokens", 100, 512, 256)
 enable_logging = st.sidebar.checkbox("Enable Detailed Logging", value=False)
 
+st.sidebar.divider()
+st.sidebar.subheader("🧹 Actions")
+
+if st.sidebar.button("🗑️ Clear Prompt", use_container_width=True):
+    st.session_state.prompt_text = ""
+    st.rerun()
+
+if st.sidebar.button("🔄 Clear Results", use_container_width=True):
+    st.session_state.df = pd.DataFrame()
+    st.rerun()
+
 # ================================================
 # MAIN UI
 # ================================================
@@ -330,20 +341,7 @@ with tab1:
     )
     st.caption(f"Max {MAX_CUSTOM_PROMPT_LENGTH} characters. Mutations generate deduplicated variants.")
 
-    col1, col2, col3 = st.columns([2, 1, 1])
-
-    with col1:
-        run = st.button("🚀 Run Scan", disabled=not selected_models, use_container_width=True)
-
-    with col2:
-        if st.button("🗑️ Clear Prompt", use_container_width=True):
-            st.session_state.clear_prompt_flag = True
-            st.rerun()
-
-    with col3:
-        if st.button("🔄 Clear Results", use_container_width=True):
-            st.session_state.df = pd.DataFrame()
-            st.rerun()
+    run = st.button("🚀 Run Scan", disabled=not selected_models, use_container_width=True)
 
 # ================================================
 # EXECUTION
