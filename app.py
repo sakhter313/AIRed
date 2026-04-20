@@ -629,7 +629,7 @@ with tab2:
         st.info("Run a scan first to see results here.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — VISUALIZATIONS (cleaned — only required charts)
+# TAB 3 — VISUALIZATIONS (cleaned — heatmap replaced)
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab3:
     if not st.session_state.df.empty:
@@ -645,22 +645,24 @@ with tab3:
         )
         st.plotly_chart(bar1, use_container_width=True)
 
-        # 2. Avg Risk Score Heatmap (Category × Model) — most insightful
-        try:
-            heat_data = df.pivot_table(
-                index="model", columns="category",
-                values="risk_score_numeric", aggfunc="mean", fill_value=0,
-            )
-            heatmap = px.imshow(
-                heat_data, color_continuous_scale="RdYlGn_r",
-                labels=dict(x="Category", y="Model", color="Avg Risk %"),
-                text_auto=".0f",
-                title="🗺️ Avg Risk Score Heatmap (Category × Model)",
-                height=350,
-            )
-            st.plotly_chart(heatmap, use_container_width=True)
-        except Exception:
-            st.info("Heatmap needs multiple categories and models.")
+        # 2. NEW VISUALIZATION (replaces heatmap)
+        # Most Common Risks Detected — shows exactly which risk types are triggering most often
+        risk_series = df['risks_detected'].str.split(', ').explode()
+        risk_counts = risk_series.value_counts().reset_index()
+        risk_counts.columns = ['Risk Type', 'Count']
+
+        risk_bar = px.bar(
+            risk_counts,
+            x="Count",
+            y="Risk Type",
+            orientation="h",
+            title="🚨 Most Common Risks Detected",
+            color="Count",
+            color_continuous_scale="Reds",
+            height=420,
+        )
+        risk_bar.update_layout(yaxis=dict(autorange="reversed"))
+        st.plotly_chart(risk_bar, use_container_width=True)
 
     else:
         st.info("Run a scan first to see visualizations.")
