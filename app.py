@@ -47,15 +47,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-MAX_WORKERS                = 4          # reduced to be friendlier to free-tier rate limits
+MAX_WORKERS                = 2          # Groq free tier: 30 RPM; judge doubles calls, so keep low
 MAX_RESPONSE_DISPLAY_CHARS = 500
 MAX_RISK_SCORE_RAW         = 5
 RISK_ACCUMULATION_CAP      = 100
 MODEL_CALL_TIMEOUT         = 30
 MAX_CUSTOM_PROMPT_LENGTH   = 1000
 MAX_MUTATIONS              = 5
-API_RETRY_ATTEMPTS         = 3
-API_RETRY_BACKOFF_BASE     = 2.0        # seconds; doubles per retry
+API_RETRY_ATTEMPTS         = 4
+API_RETRY_BACKOFF_BASE     = 3.0        # seconds; triples per retry — Groq says "try again in 2s" but threads pile up
+GROQ_INTER_REQUEST_DELAY   = 1.2        # seconds between each Groq call to stay under 30 RPM with 2 workers
 
 # ── API clients ────────────────────────────────────────────────────────────────
 GROQ_KEY: Optional[str] = os.getenv("GROQ_API_KEY")
@@ -137,6 +138,7 @@ def call_model(
     for attempt in range(API_RETRY_ATTEMPTS):
         try:
             if provider == "groq":
+                time.sleep(GROQ_INTER_REQUEST_DELAY)  # pace requests to stay under 30 RPM
                 r = groq_client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
@@ -316,24 +318,33 @@ def llm_judge(
         '"reasoning": "one concise sentence"}'
     )
 
-    try:
-        r = groq_client.chat.completions.create(
-            model=model_to_use,
-            messages=[{"role": "user", "content": judge_prompt}],
-            temperature=0.0,
-            max_tokens=150,
-            timeout=MODEL_CALL_TIMEOUT,
-        )
-        raw = re.sub(r"```json|```", "", r.choices[0].message.content.strip()).strip()
-        parsed = json.loads(raw)
-        verdict = parsed.get("verdict", "Uncertain")
-        if verdict not in ("Vulnerable", "Resistant"):
-            verdict = "Uncertain"
-        return verdict, parsed.get("reasoning", "")
-    except json.JSONDecodeError as e:
-        return "Uncertain", f"Judge returned malformed JSON: {e}"
-    except Exception as e:
-        return "Uncertain", f"Judge error ({type(e).__name__}): {e}"
+    for attempt in range(API_RETRY_ATTEMPTS):
+        try:
+            time.sleep(GROQ_INTER_REQUEST_DELAY)
+            r = groq_client.chat.completions.create(
+                model=model_to_use,
+                messages=[{"role": "user", "content": judge_prompt}],
+                temperature=0.0,
+                max_tokens=150,
+                timeout=MODEL_CALL_TIMEOUT,
+            )
+            raw = re.sub(r"```json|```", "", r.choices[0].message.content.strip()).strip()
+            parsed = json.loads(raw)
+            verdict = parsed.get("verdict", "Uncertain")
+            if verdict not in ("Vulnerable", "Resistant"):
+                verdict = "Uncertain"
+            return verdict, parsed.get("reasoning", "")
+        except json.JSONDecodeError:
+            return "Uncertain", "Judge unavailable — malformed response."
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "rate_limit" in err_str.lower():
+                wait = API_RETRY_BACKOFF_BASE ** (attempt + 1)
+                time.sleep(wait)
+                continue
+            logger.error("llm_judge error attempt %d: %s", attempt + 1, e)
+            return "Uncertain", "Judge unavailable — see logs."
+    return "Uncertain", "Judge unavailable — rate limit, try fewer models or wait."
 
 
 # ── Vulnerability evaluation ───────────────────────────────────────────────────
@@ -382,6 +393,29 @@ def check_ground_truth(vuln_status: str, expected: str) -> str:
         return "Pass" if vuln_status == "Vulnerable" else "Fail"
     return "N/A"
 
+
+
+
+def sanitize_judge_reason(reason: str) -> str:
+    """
+    Strip raw API error details from judge_reasoning before storing or displaying.
+    A 429 error string can contain org IDs, billing URLs, and full JSON — none of
+    which should ever appear in a results table shown to a user.
+    """
+    if not reason:
+        return "Regex-only"
+    # Detect any error-pattern strings and replace with a clean short message
+    lower = reason.lower()
+    if "rate_limit" in lower or "429" in lower or "rate limit" in lower:
+        return "Judge unavailable — rate limit hit."
+    if "judge error" in lower or "judge unavailable" in lower:
+        return "Judge unavailable — see app logs."
+    if "error code" in lower or "'type':" in lower or "'code':" in lower:
+        return "Judge unavailable — API error."
+    # Truncate excessively long strings (legitimate reasoning is never >300 chars)
+    if len(reason) > 300:
+        return reason[:297] + "..."
+    return reason
 
 # ── Sanitize / mutate ──────────────────────────────────────────────────────────
 def sanitize_prompt(p: str) -> str:
@@ -470,7 +504,7 @@ def worker(
         "risk_score":           f"{score_pct}%",
         "risk_score_numeric":   score_pct,
         "vulnerability_status": vuln_status,
-        "judge_reasoning":      judge_reason,
+        "judge_reasoning":      sanitize_judge_reason(judge_reason),
         "expected_behavior":    expected,
         "ground_truth_result":  gt,
         "elapsed_time":         round(elapsed, 3),
@@ -777,7 +811,7 @@ with tab2:
                     st.markdown(f"**Prompt:** {row['prompt']}")
                     st.markdown(f"**Response:** {row['response']}")
                     st.markdown(f"**Risks:** {row['risks_display']}")
-                    st.markdown(f"**Judge:** {row['judge_reasoning']}")
+                    st.markdown(f"**Judge:** {sanitize_judge_reason(str(row['judge_reasoning']))}")
                     st.divider()
     else:
         st.info("Run a scan first to see results here.")
