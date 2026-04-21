@@ -506,13 +506,10 @@ if not selected_models:
 mutations      = st.sidebar.slider("Mutations per custom prompt", 1, MAX_MUTATIONS, 2)
 temperature    = st.sidebar.slider("Temperature", 0.0, 1.0, 0.3)
 max_tokens     = st.sidebar.slider("Max Tokens", 100, 512, 256)
-use_judge      = st.sidebar.checkbox(
-    "🧑‍⚖️ Enable LLM Judge",
-    value=bool(groq_client),
-    disabled=not groq_client,
-    help="Secondary LLM validates regex verdicts. Requires Groq key.",
-)
-enable_logging = st.sidebar.checkbox("Enable Detailed Logging", value=False)
+# LLM Judge and Detailed Logging are hidden from the UI but fully active in code.
+# Judge always runs when Groq is available; logging always off (change False to True to enable).
+use_judge      = bool(groq_client)
+enable_logging = False
 
 judge_model: Optional[str] = None
 if use_judge and groq_client:
@@ -522,7 +519,7 @@ if use_judge and groq_client:
 st.sidebar.divider()
 st.sidebar.markdown("**Detection Layers**")
 st.sidebar.caption("Layer 1: Regex on model response (fast, free)")
-st.sidebar.caption("Layer 2: LLM Judge via Groq (semantic, optional)")
+st.sidebar.caption("Layer 2: LLM Judge via Groq (always active if key set)")
 st.sidebar.caption("Verdict: Vulnerable if either layer flags")
 
 if st.sidebar.button("🔄 Clear Results & Dataset", use_container_width=True):
@@ -814,19 +811,42 @@ with tab3:
         )
         st.plotly_chart(_style(bar1), use_container_width=True)
 
-        # ── Chart 2: Most Common Risks Detected ───────────────────────────────
-        # FIX: use pipe delimiter — safe even if risk names contained commas
-        risk_series = df["risks_detected"].str.split("|").explode()
-        risk_counts = risk_series.value_counts().reset_index()
-        risk_counts.columns = ["Risk Type", "Count"]
+        # ── Chart 2: Risk Category Spider Map (all models combined) ──────────
+        risk_categories = [r for r in RISK_SCORES.keys() if r != "Uncertain"]
+        spider_data = []
+        for risk_cat in risk_categories:
+            count = df["risks_detected"].str.contains(
+                re.escape(risk_cat), regex=True
+            ).sum()
+            spider_data.append(int(count))
 
-        risk_bar = px.bar(
-            risk_counts, x="Count", y="Risk Type", orientation="h",
-            title="🚨 Most Common Risks Detected",
-            color="Count", color_continuous_scale="Reds", height=450,
+        spider_fig = go.Figure()
+        spider_fig.add_trace(go.Scatterpolar(
+            r=spider_data + [spider_data[0]],
+            theta=risk_categories + [risk_categories[0]],
+            fill="toself",
+            name="All Models",
+            line=dict(color="#ef5350", width=2),
+            fillcolor="rgba(239,83,80,0.25)",
+        ))
+        spider_fig.update_layout(
+            polar=dict(
+                radialaxis=dict(
+                    visible=True,
+                    color="#8b949e",
+                    gridcolor="#30363d",
+                    linecolor="#30363d",
+                ),
+                angularaxis=dict(color="#e6edf3"),
+                bgcolor="rgba(0,0,0,0)",
+            ),
+            showlegend=False,
+            title="🕸️ Risk Category Hit Map — All Models Combined",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e6edf3",
+            height=500,
         )
-        risk_bar.update_layout(yaxis=dict(autorange="reversed"))
-        st.plotly_chart(_style(risk_bar), use_container_width=True)
+        st.plotly_chart(spider_fig, use_container_width=True)
 
         st.divider()
 
@@ -868,8 +888,8 @@ with tab3:
             )
             st.plotly_chart(_style(lat_fig), use_container_width=True)
 
-        # ── Chart 5: Risk Category Radar per Model ────────────────────────────
-        st.subheader("🕸️ Risk Category Radar per Model")
+        # ── Chart 5: Risk Category Radar — per model breakdown ────────────────
+        st.subheader("🕸️ Risk Category Radar — Per Model Breakdown")
         risk_categories = [r for r in RISK_SCORES.keys() if r != "Uncertain"]
         models_in_results = df["model"].unique().tolist()
 
